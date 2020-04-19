@@ -48,6 +48,8 @@ class TripletImageFolder(ZeroShotImageFolder):
         image, label = super().__getitem__(index)
         positive_idx = random.choice(self.target_to_idx[label])
         negative_idx = random.choice(self.target_to_idx[random.choice(list(self.target_set - set([label])))])
-        pos_image,_ = super().__getitem__(positive_idx)
-        neg_image,_ = super().__getitem__(negative_idx)
+        pos_image,positive_label = super().__getitem__(positive_idx)
+        neg_image,negative_label = super().__getitem__(negative_idx)
+        assert positive_label == label
+        assert negative_label != label
         return image, pos_image, neg_image
