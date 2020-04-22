@@ -5,6 +5,8 @@ import os
 import torch
 import torch.nn as nn
 import torch.distributions as dist
+from bottleneck import argpartition
+
 
 def get_normal_from_params(params, dim = 1):
     mu, log_var = torch.chunk(params,2,dim=dim)
@@ -33,3 +35,4 @@ def get_latest_checkpoint_file(dir):
         return checkpoint_files[0]
     else:
         return None
+

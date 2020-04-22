@@ -12,7 +12,7 @@ from torchvision import transforms
 import tqdm
 
 from models.dvml import DVML
-from datasets.base import TripletImageFolder,make_infinite_iterator
+from datasets.base import make_infinite_iterator,BalancedBatchSampler,ZeroShotImageFolder
 import utils
 import losses
 
@@ -24,16 +24,19 @@ parser.add_argument("--num_epochs", default = 100, type = int)
 parser.add_argument("--samples_per_epoch", default = 60, type = int)
 parser.add_argument("--learning_rate", default = 0.0001, type = float)
 parser.add_argument("--data_root",default = "~/.data", type = str)
-parser.add_argument("--batch_size", default = 120, type = int)
+parser.add_argument("--n_classes", default = 6, type = int)
+parser.add_argument("--n_samples", default = 20, type = int)
 parser.add_argument("--checkpoint_freq",default = 2, type = int)
+parser.add_argument("--eval_freq",default = 10, type = int)
 parser.add_argument("--max_checkpoints", default = 5, type = int)
 parser.add_argument("--num_first_phase_epochs", default = 25, type = int)
 args = parser.parse_args()
 
 #Load dataset
 transform = transforms.Compose([transforms.RandomCrop((224,224),pad_if_needed=True),transforms.RandomHorizontalFlip(),transforms.ToTensor()])
-train_dataset = TripletImageFolder(args.data_root,train = True, transform = transform)
-train_loader = DataLoader(train_dataset,batch_size=args.batch_size,shuffle=True,num_workers=5,drop_last=True,pin_memory=True)
+train_dataset = ZeroShotImageFolder(args.data_root,train = True, transform = transform)
+batch_sampler = BalancedBatchSampler(train_dataset,args.n_classes,args.n_samples)
+train_loader = DataLoader(train_dataset,batch_sampler = batch_sampler, pin_memory=True)
 train_loader = make_infinite_iterator(train_loader)
 
 
@@ -60,6 +63,9 @@ if checkpoint:
 #Load summary wirter
 train_summary_writer = SummaryWriter(args.log_dir)
 
+#Loss
+n_pair_loss = losses.NPairLoss()
+
 pb = tqdm.tqdm(total = args.num_epochs,initial = start_itr)
 
 for global_itr in range(start_itr,args.num_epochs):
@@ -70,37 +76,38 @@ for global_itr in range(start_itr,args.num_epochs):
     disc_latent_sum = 0
     total_sum = 0
     for i in range(args.samples_per_epoch):
-        x_a,x_p,x_n = next(train_loader)
-        x = torch.cat([x_a,x_p,x_n],dim = 0).cuda()
+        x,target = next(train_loader)
+        x = x.cuda()
+        target = target.cuda()
         z_inv,mu_logvar,hidden = dvml_model(x)
 
         q_dist = utils.get_normal_from_params(mu_logvar)
         p_dist = dist.Normal(0,1)
 
         #KL Loss
-        kl_loss = dist.kl_divergence(q_dist,p_dist)[:args.batch_size].sum(-1).mean()
+        kl_loss = dist.kl_divergence(q_dist,p_dist).sum(-1).mean()
 
         #Discriminate invar
-        disc_inv_loss = losses.triplet_loss(*torch.chunk(z_inv,3))
+        disc_inv_loss = n_pair_loss(z_inv,target)
 
         if phase1:
             z_var = q_dist.sample()
             z = z_inv + z_var
-            decoded = decoder_model(z[:args.batch_size].detach())
+            decoded = decoder_model(z.detach())
             #l2_loss
-            l2_loss = F.mse_loss(hidden[:args.batch_size],decoded)
+            l2_loss = F.mse_loss(hidden,decoded)
         else:
             z_var = q_dist.sample((20,))
             z = z_inv[None] + z_var
-            decoded = decoder_model(z[:,:args.batch_size].reshape([-1,args.z_dims]))
+            decoded = decoder_model(z.reshape([-1,args.z_dims]))
             decoded = decoded.reshape([20,-1,1024])
             #l2_loss
-            l2_loss = F.mse_loss(hidden[None,:args.batch_size],decoded)
+            l2_loss = F.mse_loss(hidden,decoded)
             z = z[0]
 
 
         #discriminate latent
-        disc_latent_loss = losses.triplet_loss(*torch.chunk(z,3))
+        disc_latent_loss = n_pair_loss(z,target)
 
         if phase1:
             total_loss = kl_loss + l2_loss + 0.1 * disc_latent_loss + disc_inv_loss
@@ -131,6 +138,7 @@ for global_itr in range(start_itr,args.num_epochs):
                     "global_itr":global_itr
                 }
         utils.save_checkpoints(checkpoint,os.path.join(args.log_dir,"model_{}.pth".format(global_itr)),max_chkps = args.max_checkpoints)
+    
 checkpoint = {
     "dvml":dvml_model.state_dict(),
     "decoder":decoder_model.state_dict(),

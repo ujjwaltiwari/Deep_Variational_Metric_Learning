@@ -32,6 +32,7 @@ targets_all = []
 
 for images,target in dataloader:
     if torch.no_grad():
+        import ipdb; ipdb.set_trace()
         z_inv,mu_logvar,_ = model(images.cuda())
         z_var = utils.sample_normal(mu_logvar)
         z = z_inv + z_var

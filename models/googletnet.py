@@ -64,9 +64,9 @@ def googlenet(device = None):
                 "transform_input" : True,
                 "aux_logits" : True,
                 "init_weights" : False,
-            }
+             }
     model = GoogLeNetAvgPool(**kwargs)
     model.load_state_dict(checkpoint)
-    for parameter in model.parameters():
-        parameter.requires_grad = False
+    #for parameter in model.parameters():
+    #    parameter.requires_grad = False
     return model
